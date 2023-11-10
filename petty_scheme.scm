@@ -55,6 +55,79 @@
       (ash (any->integer x) shift-amnt)
       (get-tag x))))
 
+(define (immediate? x)
+  (or (null? x) (integer? x) (char? x) (boolean? x)))
+
+
+(define (primcall-operand i x)
+  (cond
+    ((intermediate? x) (intermediate-rep (list-ref x i)))
+    ((list? x) (emit-application x))))
+
+
+(define unary-primitives (make-hash-table))
+
+(hash-set! unary-primitives
+           '+1
+           '(lambda (x)
+              (emit-expr (primcall-operand 1 x))
+              (emit "addq $~a, %rax" (immediate-rep 1))))
+
+(hash-set! unary-primitives
+           '-1
+           '(lambda (x)
+              (emit-expr (primcall-operand 1 x))
+              (emit "subq $~a, %rax" (immediate-rep 1))))
+
+(hash-set! unary-primitives
+           'integer->char
+           '(lambda (x)
+              ))
+
+(hash-set! unary-primitives
+           'char->integer
+           '(lambda (x)
+              ))
+
+(hash-set! unary-primitives
+           'not
+           '(lambda (x)
+              ))
+
+(hash-set! unary-primitives
+           'null?
+           '(lambda (x)
+              ))
+
+
+(hash-set! unary-primitives
+           'zero?
+           '(lambda (x)
+              ))
+
+(hash-set! unary-primitives
+           'integer?
+           '(lambda (x)
+              ))
+
+(hash-set! unary-primitives
+           'char?
+           '(lambda (x)
+              ))
+
+(hash-set! unary-primitives
+           'boolean?
+           '(lambda (x)
+               ))
+
+
+(define unary-primitives (make-hash-table))
+
+(define (primcall? x)
+  (or (hash-ref unary-primitives x)
+      (hash-ref binary-primitives x)))
+
+
 
 (define (compile-program in-path out-path filename)
   (call-with-input-file (format #f "~a/~a.scm" in-path filename)
@@ -71,14 +144,30 @@
             (format out ".globl scheme_entry~%")
             (format out ".type scheme_entry, @function~%~%")
             (format out "scheme_entry:~%"))
+          (define (emit-eval expr env)
+            (cond ((immediate? expr)
+                    (emit "movq $~a, %rax" (immediate-rep expr)))
+                  ((symbol? expr)
+                   (emit ".error"))
+                  ((list? expr)
+                   (let* ((apply-list (for-each emit-eval expr))
+                          (arity (length (- apply-list 1))))
+                     (cond ((< 0 arity) (emit ".error"))
+                           ((zero? arity) (emit-eval (car apply-list) env))
+                           (else (emit-apply (car apply-list) (cdr apply-list))))))
+                  (else (emit ".error"))))
+          (define (emit-apply fn params)
+            (emit ".error"))
+
 
           (emit-preamble)
           (let loop ((current-clause (read in)))
             (if (not (eof-object? current-clause))
                 (begin
-                  (emit "movq $~a, %rax" (immediate-rep current-clause))
+                  (emit-eval current-clause '())
                   (loop (read in)))
                 (emit "ret"))))))))
+
 
 (define ipath (cadr (program-arguments)))
 (define opath (caddr (program-arguments)))
