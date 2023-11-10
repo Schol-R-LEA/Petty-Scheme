@@ -59,75 +59,19 @@
   (or (null? x) (integer? x) (char? x) (boolean? x)))
 
 
-(define (primcall-operand i x)
-  (cond
-    ((intermediate? x) (intermediate-rep (list-ref x i)))
-    ((list? x) (emit-application x))))
+(define primitives (make-hash-table))
 
 
-(define unary-primitives (make-hash-table))
+(define (primitive? x)
+  (or (hash-ref primitives x)))
 
-(hash-set! unary-primitives
-           '+1
-           '(lambda (x)
-              (emit-expr (primcall-operand 1 x))
-              (emit "addq $~a, %rax" (immediate-rep 1))))
+(define (prim-arity fn)
+  (car fn))
 
-(hash-set! unary-primitives
-           '-1
-           '(lambda (x)
-              (emit-expr (primcall-operand 1 x))
-              (emit "subq $~a, %rax" (immediate-rep 1))))
+(define (prim-proc fn)
+  (cdr fn))
 
-(hash-set! unary-primitives
-           'integer->char
-           '(lambda (x)
-              ))
-
-(hash-set! unary-primitives
-           'char->integer
-           '(lambda (x)
-              ))
-
-(hash-set! unary-primitives
-           'not
-           '(lambda (x)
-              ))
-
-(hash-set! unary-primitives
-           'null?
-           '(lambda (x)
-              ))
-
-
-(hash-set! unary-primitives
-           'zero?
-           '(lambda (x)
-              ))
-
-(hash-set! unary-primitives
-           'integer?
-           '(lambda (x)
-              ))
-
-(hash-set! unary-primitives
-           'char?
-           '(lambda (x)
-              ))
-
-(hash-set! unary-primitives
-           'boolean?
-           '(lambda (x)
-               ))
-
-
-(define unary-primitives (make-hash-table))
-
-(define (primcall? x)
-  (or (hash-ref unary-primitives x)
-      (hash-ref binary-primitives x)))
-
-
+(define passing-seq '(rdi rsi rdx rcx r8 r9))
 
 (define (compile-program in-path out-path filename)
   (call-with-input-file (format #f "~a/~a.scm" in-path filename)
@@ -144,26 +88,119 @@
             (format out ".globl scheme_entry~%")
             (format out ".type scheme_entry, @function~%~%")
             (format out "scheme_entry:~%"))
+
+          (define (evlist args env)
+            (let ((list-end (length args))
+                  (reg-top (- (length passing-seq) 1)))
+              (let iter ((current-param 0))
+                (if (< current-param list-end)
+                    (let ((current-arg (list-ref args current-param))
+                          (current-reg (list-ref passing-seq (min reg-top current-param))))
+                      (emit-eval current-arg env)
+                      (if (> current-param reg-top)
+                          (emit "pushq ~a" current-arg))
+                          (emit "movq %rax, %~a" current-reg))
+                      (iter (+ 1 current-param))))))
           (define (emit-eval expr env)
             (cond ((immediate? expr)
-                    (emit "movq $~a, %rax" (immediate-rep expr)))
+                   (emit "movq $~a, %rax" (immediate-rep expr)))
                   ((symbol? expr)
-                   (emit ".error"))
+                   (emit ".error symbols not supported yet"))
                   ((list? expr)
-                   (let* ((apply-list (for-each emit-eval expr))
-                          (arity (length (- apply-list 1))))
-                     (cond ((< 0 arity) (emit ".error"))
-                           ((zero? arity) (emit-eval (car apply-list) env))
-                           (else (emit-apply (car apply-list) (cdr apply-list))))))
-                  (else (emit ".error"))))
+                   (let ((arity (- (length expr) 1))
+                         (fn (car expr)))
+                     (cond ((> 0 arity) (emit ".error arity mismatch"))
+                            ((zero? arity)
+                             (if (primitive? fn)
+                                 (apply-prim fn '() env)
+                                 (emit-apply fn '() env)))
+                            (else
+                              (let ((arg-list (cdr expr)))
+                                (let ((evaluated (evlist arg-list env)))
+                                  (if (primitive? fn)
+                                      (apply-prim fn evaluated env)
+                                      (emit-apply fn evaluated env))))))))
+                  (else (emit ".error cannot evaluate"))))
+          (define (apply-prim fn args env)
+            (let ((op (hash-ref primitives fn)))
+              (if op
+                  (case (prim-arity op)
+                    ((0) ((prim-proc op)))
+                    ((1) ((prim-proc op) (list-ref passing-seq 0)))
+                    ((2) ((prim-proc op) (list-ref passing-seq 0)
+                                         (list-ref passing-seq 1)))
+                    (else (emit ".error invalid arity in primitive ~a" fn)))
+                  (emit ".error primitive ~a not found" fn))))
           (define (emit-apply fn params)
-            (emit ".error"))
-
+            (emit ".error procedure application ot supported yet"))
 
           (emit-preamble)
+
+          (hash-set! primitives
+            'inc
+            (cons 1 (lambda (x)
+                       (emit "movq %~a, %rax" x)
+                       (emit "addq $~d, %rax" (immediate-rep 1)))))
+
+          (hash-set! primitives
+            'dec
+            (cons 1 (lambda (x)
+                      (emit "movq %~a, %rax" x)
+                      (emit "subq $~d, %rax" (immediate-rep 1)))))
+
+          ; (hash-set! primitives
+          ;   'integer->char
+          ;   (1 .
+          ;    (lambda (x)
+          ;      #f)))
+
+          ; (hash-set! primitives
+          ;   'char->integer
+          ;   (1 .
+          ;    (lambda (x)
+          ;      #f)))
+
+          ; (hash-set! primitives
+          ;   'not
+          ;   (1 .
+          ;    (lambda (x)
+          ;      #f)))
+
+          ; (hash-set! primitives
+          ;   'null?
+          ;   (1 .
+          ;    (lambda (x)
+          ;      #f)))
+
+
+          ; (hash-set! primitives
+          ;   'zero?
+          ;   (1 .
+          ;    (lambda (x)
+          ;      #f)))
+
+          ; (hash-set! primitives
+          ;   'integer?
+          ;   (1 .
+          ;    (lambda (x)
+          ;      #f)))
+
+          ; (hash-set! primitives
+          ;   'char?
+          ;   (1 .
+          ;    (lambda (x)
+          ;      #f)))
+
+          ; (hash-set! primitives
+          ;   'boolean?
+          ;   (1 .
+          ;    (lambda (x)
+          ;      #f)))
+
           (let loop ((current-clause (read in)))
             (if (not (eof-object? current-clause))
                 (begin
+                  ; (format #t "~A~%" current-clause)
                   (emit-eval current-clause '())
                   (loop (read in)))
                 (emit "ret"))))))))
