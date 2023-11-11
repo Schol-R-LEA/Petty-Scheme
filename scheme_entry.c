@@ -48,7 +48,7 @@ int main(int argc, char** argv)
     }
     else if((val & tags[tag_int].mask) == tv_int)
     {
-        printf("%lu", val >> tags[tag_int].shift);
+        printf("%d", (int) val >> tags[tag_int].shift);
     }
     else if((val & tags[tag_char].mask) == tv_char)
     {

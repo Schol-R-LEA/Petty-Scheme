@@ -4,8 +4,30 @@
              (srfi srfi-60))
 
 
+(define global-env '())
+
+
 (define (gen-label label-base)
   (gensym label-base))
+
+(define comparisons (make-hash-table))
+
+(hash-set! comparisons 'equal "e")
+(hash-set! comparisons 'not-equal "ne")
+(hash-set! comparisons 'zero "z")
+(hash-set! comparisons 'not-zero "nz")
+(hash-set! comparisons 'greater "g")
+(hash-set! comparisons 'not-greater "ng")
+(hash-set! comparisons 'greater-equal "ge")
+(hash-set! comparisons 'not-greater-equal "nge")
+(hash-set! comparisons 'less "l")
+(hash-set! comparisons 'not-less "nl")
+(hash-set! comparisons 'less-equal "le")
+(hash-set! comparisons 'not-less-equal "nle")
+(hash-set! comparisons 'carry "c")
+(hash-set! comparisons 'not-carry "nc")
+(hash-set! comparisons 'overflow "o")
+(hash-set! comparisons 'not-overflow "no")
 
 
 (define tags (make-hash-table))
@@ -89,17 +111,33 @@
             (format out "~/")
             (apply format out fmt args)
             (format out "~%"))
+
           (define (emit-error descr)
             (format #t "error - ~a~%" descr)
             (format out ".error ~a~a~a~%" #\" descr #\"))
+
           (define (emit-label label)
             (format out "~a:~%" label))
+
+
+          (define (emit-primitive-procedures)
+            #f)
+
           (define (emit-preamble)
             (format out ".text~%")
             (format out ".p2align 8,,15~%")
             (format out ".globl scheme_entry~%")
             (format out ".type scheme_entry, @function~%~%")
-            (format out "scheme_entry:~%"))
+            (emit-primitive-procedures)
+            (format out "~%scheme_entry:~%"))
+
+          (define (emit-predicate-result comparison)
+            (let ((bool-shift (find-shift (hash-ref tags 'bool)))
+                  (bool-tag (find-tag (hash-ref tags 'bool))))
+                        (emit "movq $0, %rax")
+                        (emit "set~a %al" (hash-ref comparisons comparison))
+                        (emit "salq $~d, %rax" bool-shift)
+                        (emit "orq $~a, %rax" bool-tag)))
 
           (define (evlist args env)
             (let ((list-end (length args))
@@ -110,9 +148,10 @@
                           (current-reg (list-ref passing-seq (min reg-top current-param))))
                       (emit-eval current-arg env)
                       (if (> current-param reg-top)
-                          (emit "pushq ~a" current-arg))
+                          (emit "pushq ~a" current-arg)
                           (emit "movq %rax, %~a" current-reg))
-                      (iter (+ 1 current-param))))))
+                      (iter (+ 1 current-param)))))))
+
           (define (emit-eval expr env)
             (cond ((immediate? expr)
                    (emit "movq $~a, %rax" (immediate-rep expr)))
@@ -135,20 +174,21 @@
                                       (apply-prim fn evaluated env)
                                       (emit-apply fn evaluated env))))))))
                   (else (emit-error "cannot evaluate"))))
+
           (define (apply-prim fn args env)
             (let ((op (hash-ref primitives fn)))
               (if op
                   (case (prim-arity op)
                     ((0) ((prim-proc op)))
                     ((1) ((prim-proc op) (list-ref passing-seq 0)))
-                    ((2) ((prim-proc op) (list-ref passing-seq 0)
+                    ((2) 
+                         ((prim-proc op) (list-ref passing-seq 0)
                                          (list-ref passing-seq 1)))
                     (else (emit-error "invalid arity in primitive")))
                   (emit-error "primitive not found"))))
+
           (define (emit-apply fn params env)
             (emit-error "procedure application not supported yet"))
-
-          (emit-preamble)
 
           (hash-set! primitives
             'inc
@@ -189,46 +229,28 @@
           (hash-set! primitives
             'null?
             (cons 1 (lambda (reg)
-                      (let ((null-mask (find-mask (hash-ref tags 'null-list)))
-                            (true-label (gen-label "null_true"))
-                            (exit-label (gen-label "null_exit")))
-                        (emit "movq %~a, %rax" reg)
-                        (emit "andq $~d, %rax" null-mask)
-                        (emit "cmpq $0, %rax")
-                        (emit "jz ~a" true-label)
-                        (emit "movq $~a, %rax" (immediate-rep #f))
-                        (emit "jmp ~a" exit-label)
-                        (emit-label true-label)
-                        (emit "movq $~a, %rax" (immediate-rep #t))
-                        (emit-label exit-label)))))
+                      (let ((null-mask (find-mask (hash-ref tags 'null-list))))
+                        (emit "testq $~d, %~a" null-mask reg)
+                        (emit-predicate-result 'equal)))))
 
           (hash-set! primitives
             'zero?
             (cons 1 (lambda (reg)
-                      (let ((bool-shift (find-shift (hash-ref tags 'bool)))
-                            (bool-tag (find-tag (hash-ref tags 'bool))))
                         (emit "movq $0, %rax")
                         (emit "cmpq $0, %~a" reg)
-                        (emit "sete %al")
-                        (emit "salq $~d, %rax" bool-shift)
-                        (emit "orq $~a, %rax" bool-tag)))))
+                        (emit-predicate-result 'equal))))
 
           (hash-set! primitives
             'integer?
             (cons 1 (lambda (reg)
                       (let ((int-tag (find-tag (hash-ref tags 'sys-int)))
-                            (int-shift (find-shift (hash-ref tags 'sys-int)))
-                            (bool-tag (find-tag (hash-ref tags 'bool)))
-                            (bool-shift (find-shift (hash-ref tags 'bool))))
+                            (int-shift (find-shift (hash-ref tags 'sys-int))))
                         (emit "pushq %rbx")
-                        (emit "movq $0, %rax")
                         (emit "movq %~a, %rbx" reg)
                         (emit "sarq $~d, %rbx" int-shift)
                         (emit "salq $~d, %rbx" int-shift)
                         (emit "cmpq %~a, %rbx" reg)
-                        (emit "sete %al")
-                        (emit "salq $~d, %rax" bool-shift)
-                        (emit "orq $~a, %rax" bool-tag)
+                        (emit-predicate-result 'equal)
                         (emit "popq %rbx")))))
 
 
@@ -237,30 +259,49 @@
             (cons 1 (lambda (reg)
                       (let ((char-mask (find-mask (hash-ref tags 'char)))
                             (char-tag (find-tag (hash-ref tags 'char)))
-                            (bool-tag (find-tag (hash-ref tags 'bool)))
-                            (bool-shift (find-shift (hash-ref tags 'bool))))
+                            (bool-tag (find-tag (hash-ref tags 'bool))))
                         (emit "movq $0, %rax")
                         (emit "andq $~d, %~a" char-mask reg)
                         (emit "cmpq $~d, %~a" char-tag reg)
-                        (emit "sete %al")
-                        (emit "salq $~d, %rax" bool-shift)
-                        (emit "orq $~a, %rax" bool-tag)))))
+                        (emit-predicate-result 'equal)))))
 
 
           (hash-set! primitives
             'boolean?
             (cons 1 (lambda (reg)
                       (let ((bool-mask (find-mask (hash-ref tags 'bool)))
-                            (bool-tag (find-tag (hash-ref tags 'bool)))
-                            (bool-shift (find-shift (hash-ref tags 'bool))))
+                            (bool-tag (find-tag (hash-ref tags 'bool))))
                         (emit "movq $0, %rax")
                         (emit "andq $~d, %~a" bool-mask reg)
                         (emit "cmpq $~d, %~a" bool-tag reg)
-                        (emit "sete %al")
-                        (emit "salq $~d, %rax" bool-shift)
-                        (emit "orq $~a, %rax" bool-tag)))))
+                        (emit-predicate-result 'equal)))))
+
+          (hash-set! primitives
+            '+
+            (cons 2 (lambda (addend-0 addend-1)
+                      (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
+                        (emit "sarq $~d, %~a" int-shift addend-0)
+                        (emit "movq %~a, %rax" addend-1)
+                        (emit "sarq $~d, %rax" int-shift)
+                        (emit "addq %~a, %rax" addend-0)
+                        (emit "salq $~d, %rax" int-shift)
+                        (emit "ret")))))
+
+          (hash-set! primitives
+            '-
+            (cons 2 (lambda (subtrahend-0 subtrahend-1)
+                      (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
+                        (emit "movq %~a, %rax" subtrahend-0)
+                        (emit "sarq $~d, %~a" int-shift subtrahend-1)
+                        (emit "sarq $~d, %rax" int-shift)
+                        (emit "subq %~a, %rax" subtrahend-1)
+                        (emit "salq $~d, %rax" int-shift)
+                        (emit "ret")))))
 
 
+
+          ;; body of the main compilation function
+          (emit-preamble)
           (let loop ((current-clause (read in)))
             (if (not (eof-object? current-clause))
                 (begin
