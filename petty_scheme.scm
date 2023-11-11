@@ -4,16 +4,23 @@
              (srfi srfi-60))
 
 
+(define (gen-label label-base)
+  (gensym label-base))
+
+
 (define tags (make-hash-table))
 
-(hash-set! tags 'sys-int   '(2 #x3 #b00000000))
+(hash-set! tags 'sys-int   '(2 #x03 #b00000000))
 (hash-set! tags 'char      '(8 #xff #b00001111))
 (hash-set! tags 'bool      '(7 #x7f #b00011111))
 (hash-set! tags 'null-list '(8 #xff #b00101111))
 
+(define find-shift car)
+(define find-mask cadr)
+(define find-tag caddr)
 
 (define (get-shift x)
-  (car
+  (find-shift
     (hash-ref tags
       (cond
         ((null? x) 'null-list)
@@ -22,7 +29,7 @@
         ((boolean? x) 'bool)))))
 
 (define (get-mask x)
-  (cadr
+  (find-mask
     (hash-ref tags
       (cond
         ((null? x) 'null-list)
@@ -32,7 +39,7 @@
 
 
 (define (get-tag x)
-  (caddr
+  (find-tag
     (hash-ref tags
       (cond
         ((null? x) 'null-list)
@@ -82,6 +89,11 @@
             (format out "~/")
             (apply format out fmt args)
             (format out "~%"))
+          (define (emit-error descr)
+            (format #t "error - ~a~%" descr)
+            (format out ".error ~a~a~a~%" #\" descr #\"))
+          (define (emit-label label)
+            (format out "~a:~%" label))
           (define (emit-preamble)
             (format out ".text~%")
             (format out ".p2align 8,,15~%")
@@ -105,11 +117,13 @@
             (cond ((immediate? expr)
                    (emit "movq $~a, %rax" (immediate-rep expr)))
                   ((symbol? expr)
-                   (emit ".error symbols not supported yet"))
+                   (emit-error "symbols not supported yet"))
                   ((list? expr)
                    (let ((arity (- (length expr) 1))
                          (fn (car expr)))
-                     (cond ((> 0 arity) (emit ".error arity mismatch"))
+                     (cond ((equal? 'quote fn)
+                            (emit "nop"))
+                           ((> 0 arity) (emit-error "arity mismatch"))
                             ((zero? arity)
                              (if (primitive? fn)
                                  (apply-prim fn '() env)
@@ -120,7 +134,7 @@
                                   (if (primitive? fn)
                                       (apply-prim fn evaluated env)
                                       (emit-apply fn evaluated env))))))))
-                  (else (emit ".error cannot evaluate"))))
+                  (else (emit-error "cannot evaluate"))))
           (define (apply-prim fn args env)
             (let ((op (hash-ref primitives fn)))
               (if op
@@ -129,78 +143,128 @@
                     ((1) ((prim-proc op) (list-ref passing-seq 0)))
                     ((2) ((prim-proc op) (list-ref passing-seq 0)
                                          (list-ref passing-seq 1)))
-                    (else (emit ".error invalid arity in primitive ~a" fn)))
-                  (emit ".error primitive ~a not found" fn))))
-          (define (emit-apply fn params)
-            (emit ".error procedure application ot supported yet"))
+                    (else (emit-error "invalid arity in primitive")))
+                  (emit-error "primitive not found"))))
+          (define (emit-apply fn params env)
+            (emit-error "procedure application not supported yet"))
 
           (emit-preamble)
 
           (hash-set! primitives
             'inc
-            (cons 1 (lambda (x)
-                       (emit "movq %~a, %rax" x)
+            (cons 1 (lambda (reg)
+                       (emit "movq %~a, %rax" reg)
                        (emit "addq $~d, %rax" (immediate-rep 1)))))
 
           (hash-set! primitives
             'dec
-            (cons 1 (lambda (x)
-                      (emit "movq %~a, %rax" x)
+            (cons 1 (lambda (reg)
+                      (emit "movq %~a, %rax" reg)
                       (emit "subq $~d, %rax" (immediate-rep 1)))))
 
-          ; (hash-set! primitives
-          ;   'integer->char
-          ;   (1 .
-          ;    (lambda (x)
-          ;      #f)))
+          (hash-set! primitives
+            'integer->char
+            (cons 1 (lambda (reg)
+                      (emit "movq %~a, %rax" reg)
+                      (emit "shlq $~d, %rax" (- (find-shift (hash-ref tags 'char))
+                                                (find-shift (hash-ref tags 'sys-int))))
+                      (emit "orq $~d, %rax" (find-tag (hash-ref tags 'char))))))
 
-          ; (hash-set! primitives
-          ;   'char->integer
-          ;   (1 .
-          ;    (lambda (x)
-          ;      #f)))
+          (hash-set! primitives
+            'char->integer
+            (cons 1 (lambda (reg)
+                      (emit "movq %~a, %rax" reg)
+                      (emit "shrq $~d, %rax" (- (find-shift (hash-ref tags 'char))
+                                                (find-shift (hash-ref tags 'sys-int)))))))
 
-          ; (hash-set! primitives
-          ;   'not
-          ;   (1 .
-          ;    (lambda (x)
-          ;      #f)))
+          (hash-set! primitives
+            'not
+            (cons 1 (lambda (reg)
+                      (let ((shift-amt (find-shift (hash-ref tags 'sys-int))))
+                        (emit "movq %~a, %rax" reg)
+                        (emit "shrq $~d, %rax" shift-amt)
+                        (emit "notq %rax")
+                        (emit "shlq $~d, %rax" shift-amt)))))
 
-          ; (hash-set! primitives
-          ;   'null?
-          ;   (1 .
-          ;    (lambda (x)
-          ;      #f)))
+          (hash-set! primitives
+            'null?
+            (cons 1 (lambda (reg)
+                      (let ((null-mask (find-mask (hash-ref tags 'null-list)))
+                            (true-label (gen-label "null_true"))
+                            (exit-label (gen-label "null_exit")))
+                        (emit "movq %~a, %rax" reg)
+                        (emit "andq $~d, %rax" null-mask)
+                        (emit "cmpq $0, %rax")
+                        (emit "jz ~a" true-label)
+                        (emit "movq $~a, %rax" (immediate-rep #f))
+                        (emit "jmp ~a" exit-label)
+                        (emit-label true-label)
+                        (emit "movq $~a, %rax" (immediate-rep #t))
+                        (emit-label exit-label)))))
+
+          (hash-set! primitives
+            'zero?
+            (cons 1 (lambda (reg)
+                      (let ((bool-shift (find-shift (hash-ref tags 'bool)))
+                            (bool-tag (find-tag (hash-ref tags 'bool))))
+                        (emit "movq $0, %rax")
+                        (emit "cmpq $0, %~a" reg)
+                        (emit "sete %al")
+                        (emit "salq $~d, %rax" bool-shift)
+                        (emit "orq $~a, %rax" bool-tag)))))
+
+          (hash-set! primitives
+            'integer?
+            (cons 1 (lambda (reg)
+                      (let ((int-tag (find-tag (hash-ref tags 'sys-int)))
+                            (int-shift (find-shift (hash-ref tags 'sys-int)))
+                            (bool-tag (find-tag (hash-ref tags 'bool)))
+                            (bool-shift (find-shift (hash-ref tags 'bool))))
+                        (emit "pushq %rbx")
+                        (emit "movq $0, %rax")
+                        (emit "movq %~a, %rbx" reg)
+                        (emit "sarq $~d, %rbx" int-shift)
+                        (emit "salq $~d, %rbx" int-shift)
+                        (emit "cmpq %~a, %rbx" reg)
+                        (emit "sete %al")
+                        (emit "salq $~d, %rax" bool-shift)
+                        (emit "orq $~a, %rax" bool-tag)
+                        (emit "popq %rbx")))))
 
 
-          ; (hash-set! primitives
-          ;   'zero?
-          ;   (1 .
-          ;    (lambda (x)
-          ;      #f)))
+          (hash-set! primitives
+            'char?
+            (cons 1 (lambda (reg)
+                      (let ((char-mask (find-mask (hash-ref tags 'char)))
+                            (char-tag (find-tag (hash-ref tags 'char)))
+                            (bool-tag (find-tag (hash-ref tags 'bool)))
+                            (bool-shift (find-shift (hash-ref tags 'bool))))
+                        (emit "movq $0, %rax")
+                        (emit "andq $~d, %~a" char-mask reg)
+                        (emit "cmpq $~d, %~a" char-tag reg)
+                        (emit "sete %al")
+                        (emit "salq $~d, %rax" bool-shift)
+                        (emit "orq $~a, %rax" bool-tag)))))
 
-          ; (hash-set! primitives
-          ;   'integer?
-          ;   (1 .
-          ;    (lambda (x)
-          ;      #f)))
 
-          ; (hash-set! primitives
-          ;   'char?
-          ;   (1 .
-          ;    (lambda (x)
-          ;      #f)))
+          (hash-set! primitives
+            'boolean?
+            (cons 1 (lambda (reg)
+                      (let ((bool-mask (find-mask (hash-ref tags 'bool)))
+                            (bool-tag (find-tag (hash-ref tags 'bool)))
+                            (bool-shift (find-shift (hash-ref tags 'bool))))
+                        (emit "movq $0, %rax")
+                        (emit "andq $~d, %~a" bool-mask reg)
+                        (emit "cmpq $~d, %~a" bool-tag reg)
+                        (emit "sete %al")
+                        (emit "salq $~d, %rax" bool-shift)
+                        (emit "orq $~a, %rax" bool-tag)))))
 
-          ; (hash-set! primitives
-          ;   'boolean?
-          ;   (1 .
-          ;    (lambda (x)
-          ;      #f)))
 
           (let loop ((current-clause (read in)))
             (if (not (eof-object? current-clause))
                 (begin
-                  ; (format #t "~A~%" current-clause)
+                  ;(format #t "~A~%" current-clause)
                   (emit-eval current-clause '())
                   (loop (read in)))
                 (emit "ret"))))))))
