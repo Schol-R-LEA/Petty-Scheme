@@ -284,8 +284,7 @@
                         (emit "movq %~a, %rax" addend-1)
                         (emit "sarq $~d, %rax" int-shift)
                         (emit "addq %~a, %rax" addend-0)
-                        (emit "salq $~d, %rax" int-shift)
-                        (emit "ret")))))
+                        (emit "salq $~d, %rax" int-shift)))))
 
           (hash-set! primitives
             '-
@@ -295,9 +294,40 @@
                         (emit "sarq $~d, %~a" int-shift subtrahend-1)
                         (emit "sarq $~d, %rax" int-shift)
                         (emit "subq %~a, %rax" subtrahend-1)
-                        (emit "salq $~d, %rax" int-shift)
-                        (emit "ret")))))
+                        (emit "salq $~d, %rax" int-shift)))))
 
+          (hash-set! primitives
+            '*
+            (cons 2 (lambda (multiplicand-0 multiplicand-1)
+                      (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
+                        (emit "sarq $~d, %~a" int-shift multiplicand-0)
+                        (emit "movq %~a, %rax" multiplicand-1)
+                        (emit "sarq $~d, %rax" int-shift)
+                        (emit "imulq %~a" multiplicand-0)
+                        (emit "salq $~d, %rax" int-shift)))))
+
+        (hash-set! primitives
+          '/
+          (cons 2 (lambda (dividend divisor)
+                    (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
+                      (emit "movq %~a, %rax" dividend)
+                      (emit "sarq $~d, %~a" int-shift divisor)
+                      (emit "sarq $~d, %rax" int-shift)
+                      (emit "mov $0, %rdx")
+                      (emit "idivq %~a" divisor)
+                      (emit "salq $~d, %rax" int-shift)))))
+
+        (hash-set! primitives
+          'mod
+          (cons 2 (lambda (dividend divisor)
+                    (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
+                      (emit "movq %~a, %rax" dividend)
+                      (emit "sarq $~d, %~a" int-shift divisor)
+                      (emit "sarq $~d, %rax" int-shift)
+                      (emit "mov $0, %rdx")
+                      (emit "idivq %~a" divisor)
+                      (emit "salq $~d, %rdx" int-shift)
+                      (emit "movq %rdx, %rax")))))
 
 
           ;; body of the main compilation function
