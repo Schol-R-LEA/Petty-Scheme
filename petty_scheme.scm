@@ -6,6 +6,7 @@
 
 (define global-env '())
 
+(define acc "rax")
 
 (define (gen-label label-base)
   (gensym label-base))
@@ -123,6 +124,12 @@
           (define (emit-primitive-procedures)
             #f)
 
+          (define (emit-move src dest)
+            (emit "movq %~a, %~a" src dest))
+
+          (define (emit-move-imm imm dest)
+            (emit "movq $~d, %~a" imm dest))
+
           (define (emit-preamble)
             (format out ".text~%")
             (format out ".p2align 8,,15~%")
@@ -131,13 +138,44 @@
             (emit-primitive-procedures)
             (format out "~%scheme_entry:~%"))
 
+          (define (emit-epilogue)
+            (format out "~%~%.data~%"))
+
           (define (emit-predicate-result comparison)
             (let ((bool-shift (find-shift (hash-ref tags 'bool)))
-                  (bool-tag (find-tag (hash-ref tags 'bool))))
+                  (bool-tag (find-tag (hash-ref tags 'bool)))
+                  (cmp (hash-ref comparisons comparison)))
                         (emit "movq $0, %rax")
-                        (emit "set~a %al" (hash-ref comparisons comparison))
+                        (emit "set~a %al" cmp)
                         (emit "salq $~d, %rax" bool-shift)
-                        (emit "orq $~a, %rax" bool-tag)))
+                        (emit "orq $~d, %rax" bool-tag)))
+
+          (define (emit-comparison-predicate value-0 value-1 comparison)
+            (emit "cmpq %~a, %~a" value-0 value-1)
+            (emit-predicate-result comparison))
+
+          (define (emit-freed type reg)
+            (let ((shift (find-shift (hash-ref tags type))))
+              (emit "sarq $~d, %~a" shift reg)))
+
+          (define (emit-tagged type reg)
+              (let ((shift (find-shift (hash-ref tags type)))
+                    (tag (find-tag (hash-ref tags type))))
+                (emit "salq $~d, %~a" shift reg)
+                (emit "orq $~d, %~a" tag reg)))
+
+          (define (emit-arith op factor-0 factor-1)
+            (emit "~aq %~a, %~a" op factor-0 factor-1))
+
+          (define (emit-arith-imm op factor-0 factor-1)
+            (emit "addq $~d, %~a" op factor-0 factor-1))
+
+          (define (emit-arith-operation op factor-0 factor-1)
+            (emit-freed 'sys-int factor-0)
+            (emit-freed 'sys-int factor-1)
+            (emit-move factor-0 acc)
+            (emit-arith op factor-1 acc)
+            (emit-tagged 'sys-int acc))
 
           (define (evlist args env)
             (let ((list-end (length args))
@@ -149,12 +187,12 @@
                       (emit-eval current-arg env)
                       (if (> current-param reg-top)
                           (emit "pushq ~a" current-arg)
-                          (emit "movq %rax, %~a" current-reg))
+                          (emit-move acc current-reg))
                       (iter (+ 1 current-param)))))))
 
           (define (emit-eval expr env)
             (cond ((immediate? expr)
-                   (emit "movq $~a, %rax" (immediate-rep expr)))
+                   (emit-move-imm (immediate-rep expr) acc))
                   ((symbol? expr)
                    (emit-error "symbols not supported yet"))
                   ((list? expr)
@@ -181,7 +219,7 @@
                   (case (prim-arity op)
                     ((0) ((prim-proc op)))
                     ((1) ((prim-proc op) (list-ref passing-seq 0)))
-                    ((2) 
+                    ((2)
                          ((prim-proc op) (list-ref passing-seq 0)
                                          (list-ref passing-seq 1)))
                     (else (emit-error "invalid arity in primitive")))
@@ -193,35 +231,38 @@
           (hash-set! primitives
             'inc
             (cons 1 (lambda (reg)
-                       (emit "movq %~a, %rax" reg)
-                       (emit "addq $~d, %rax" (immediate-rep 1)))))
+                       (emit-move reg acc)
+                       (emit-arith-imm "add" (immediate-rep 1) "rax"))))
 
           (hash-set! primitives
             'dec
             (cons 1 (lambda (reg)
-                      (emit "movq %~a, %rax" reg)
-                      (emit "subq $~d, %rax" (immediate-rep 1)))))
+                      (emit-move reg "rax")
+                      (emit-arith-imm "sub" (immediate-rep 1) "rax"))))
 
           (hash-set! primitives
             'integer->char
             (cons 1 (lambda (reg)
-                      (emit "movq %~a, %rax" reg)
-                      (emit "shlq $~d, %rax" (- (find-shift (hash-ref tags 'char))
-                                                (find-shift (hash-ref tags 'sys-int))))
-                      (emit "orq $~d, %rax" (find-tag (hash-ref tags 'char))))))
+                      (let ((shift (- (find-shift (hash-ref tags 'char))
+                                      (find-shift (hash-ref tags 'sys-int))))
+                            (tag (find-tag (hash-ref tags 'char))))
+                      (emit-move reg "rax")
+                      (emit "salq $~d, %rax" shift)
+                      (emit "orq $~d, %rax" tag)))))
 
           (hash-set! primitives
             'char->integer
             (cons 1 (lambda (reg)
-                      (emit "movq %~a, %rax" reg)
-                      (emit "shrq $~d, %rax" (- (find-shift (hash-ref tags 'char))
-                                                (find-shift (hash-ref tags 'sys-int)))))))
+                      (let ((shift (- (find-shift (hash-ref tags 'char))
+                                     (find-shift (hash-ref tags 'sys-int)))))
+                        (emit "movq %~a, %rax" reg)
+                        (emit "shrq $~d, %rax" shift)))))
 
           (hash-set! primitives
             'not
             (cons 1 (lambda (reg)
                       (let ((shift-amt (find-shift (hash-ref tags 'sys-int))))
-                        (emit "movq %~a, %rax" reg)
+                        (emit-move reg "rax")
                         (emit "shrq $~d, %rax" shift-amt)
                         (emit "notq %rax")
                         (emit "shlq $~d, %rax" shift-amt)))))
@@ -243,15 +284,10 @@
           (hash-set! primitives
             'integer?
             (cons 1 (lambda (reg)
-                      (let ((int-tag (find-tag (hash-ref tags 'sys-int)))
-                            (int-shift (find-shift (hash-ref tags 'sys-int))))
-                        (emit "pushq %rbx")
-                        (emit "movq %~a, %rbx" reg)
-                        (emit "sarq $~d, %rbx" int-shift)
-                        (emit "salq $~d, %rbx" int-shift)
-                        (emit "cmpq %~a, %rbx" reg)
-                        (emit-predicate-result 'equal)
-                        (emit "popq %rbx")))))
+                      (emit-move reg acc)
+                      (emit-freed 'sys-int acc)
+                      (emit "cmpq %~a, %rax" reg)
+                      (emit-predicate-result 'equal))))
 
 
           (hash-set! primitives
@@ -278,56 +314,62 @@
 
           (hash-set! primitives
             '+
-            (cons 2 (lambda (addend-0 addend-1)
-                      (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
-                        (emit "sarq $~d, %~a" int-shift addend-0)
-                        (emit "movq %~a, %rax" addend-1)
-                        (emit "sarq $~d, %rax" int-shift)
-                        (emit "addq %~a, %rax" addend-0)
-                        (emit "salq $~d, %rax" int-shift)))))
+            (cons 2 (lambda (augend addend)
+                      (emit-arith-operation "add" augend addend))))
 
           (hash-set! primitives
             '-
-            (cons 2 (lambda (subtrahend-0 subtrahend-1)
-                      (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
-                        (emit "movq %~a, %rax" subtrahend-0)
-                        (emit "sarq $~d, %~a" int-shift subtrahend-1)
-                        (emit "sarq $~d, %rax" int-shift)
-                        (emit "subq %~a, %rax" subtrahend-1)
-                        (emit "salq $~d, %rax" int-shift)))))
+            (cons 2 (lambda (minuend subtrahend)
+                      (emit-arith-operation "sub" minuend subtrahend))))
 
           (hash-set! primitives
             '*
-            (cons 2 (lambda (multiplicand-0 multiplicand-1)
-                      (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
-                        (emit "sarq $~d, %~a" int-shift multiplicand-0)
-                        (emit "movq %~a, %rax" multiplicand-1)
-                        (emit "sarq $~d, %rax" int-shift)
-                        (emit "imulq %~a" multiplicand-0)
-                        (emit "salq $~d, %rax" int-shift)))))
+            (cons 2 (lambda (multiplier multiplicand)
+                      (emit-arith-operation "imul" multiplier multiplicand))))
 
-        (hash-set! primitives
-          '/
-          (cons 2 (lambda (dividend divisor)
-                    (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
-                      (emit "movq %~a, %rax" dividend)
-                      (emit "sarq $~d, %~a" int-shift divisor)
-                      (emit "sarq $~d, %rax" int-shift)
-                      (emit "mov $0, %rdx")
-                      (emit "idivq %~a" divisor)
-                      (emit "salq $~d, %rax" int-shift)))))
+          (hash-set! primitives
+            '/
+            (cons 2 (lambda (dividend divisor)
+                      (emit-move-imm 0 "rdx")
+                      (emit-arith-operation "idiv" dividend divisor))))
 
-        (hash-set! primitives
-          'mod
-          (cons 2 (lambda (dividend divisor)
-                    (let ((int-shift (find-shift (hash-ref tags 'sys-int))))
-                      (emit "movq %~a, %rax" dividend)
-                      (emit "sarq $~d, %~a" int-shift divisor)
-                      (emit "sarq $~d, %rax" int-shift)
-                      (emit "mov $0, %rdx")
-                      (emit "idivq %~a" divisor)
-                      (emit "salq $~d, %rdx" int-shift)
-                      (emit "movq %rdx, %rax")))))
+          (hash-set! primitives
+            'mod
+            (cons 2 (lambda (dividend divisor)
+                      (emit-move-imm 0 "rdx")
+                      (emit-arith-operation "idiv" dividend divisor)
+                      (emit-tagged 'sys-int "rdx")
+                      (emit-move "rdx" acc))))
+
+          (hash-set! primitives
+            '=
+            (cons 2 (lambda (value-0 value-1)
+                      (emit-comparison-predicate value-0 value-1 'equal))))
+
+          (hash-set! primitives
+            '!=
+            (cons 2 (lambda (value-0 value-1)
+                      (emit-comparison-predicate value-0 value-1 'not-equal))))
+
+          (hash-set! primitives
+            '<
+            (cons 2 (lambda (value-0 value-1)
+                      (emit-comparison-predicate value-0 value-1 'less))))
+
+          (hash-set! primitives
+            '<=
+            (cons 2 (lambda (value-0 value-1)
+                      (emit-comparison-predicate value-0 value-1 'less-equal))))
+
+          (hash-set! primitives
+            '>
+            (cons 2 (lambda (value-0 value-1)
+                      (emit-comparison-predicate value-0 value-1 'greater))))
+
+          (hash-set! primitives
+            '>=
+            (cons 2 (lambda (value-0 value-1)
+                      (emit-comparison-predicate value-0 value-1 'greater-equal))))
 
 
           ;; body of the main compilation function
@@ -338,7 +380,8 @@
                   ;(format #t "~A~%" current-clause)
                   (emit-eval current-clause '())
                   (loop (read in)))
-                (emit "ret"))))))))
+                (emit "ret")))
+          (emit-epilogue))))))
 
 
 (define ipath (cadr (program-arguments)))
