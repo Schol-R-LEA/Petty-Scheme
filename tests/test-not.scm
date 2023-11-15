@@ -1,1 +1,1 @@
-(not #xffff)
+(not 1)

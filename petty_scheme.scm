@@ -142,17 +142,21 @@
             (format out "~%~%.data~%"))
 
           (define (emit-predicate-result comparison)
-            (let ((bool-shift (find-shift (hash-ref tags 'bool)))
-                  (bool-tag (find-tag (hash-ref tags 'bool)))
-                  (cmp (hash-ref comparisons comparison)))
-                        (emit "movq $0, %rax")
-                        (emit "set~a %al" cmp)
-                        (emit "salq $~d, %rax" bool-shift)
-                        (emit "orq $~d, %rax" bool-tag)))
+            (let ((cmp (hash-ref comparisons comparison)))
+              (emit-move-imm 0 acc)
+              (emit "set~a %al" cmp)
+              (emit-tagged 'bool acc)))
 
           (define (emit-comparison-predicate value-0 value-1 comparison)
             (emit "cmpq %~a, %~a" value-0 value-1)
             (emit-predicate-result comparison))
+
+          (define (emit-type-predicate type reg)
+            (let ((mask (find-mask (hash-ref tags type)))
+                  (tag (find-tag (hash-ref tags type))))
+              (emit-move-imm tag acc)
+              (emit "andq $~d, %~a" mask reg)
+              (emit-comparison-predicate acc reg 'equal)))
 
           (define (emit-freed type reg)
             (let ((shift (find-shift (hash-ref tags type))))
@@ -168,7 +172,7 @@
             (emit "~aq %~a, %~a" op factor-0 factor-1))
 
           (define (emit-arith-imm op factor-0 factor-1)
-            (emit "addq $~d, %~a" op factor-0 factor-1))
+            (emit "~aq $~d, %~a" op factor-0 factor-1))
 
           (define (emit-arith-operation op factor-0 factor-1)
             (emit-freed 'sys-int factor-0)
@@ -232,13 +236,13 @@
             'inc
             (cons 1 (lambda (reg)
                        (emit-move reg acc)
-                       (emit-arith-imm "add" (immediate-rep 1) "rax"))))
+                       (emit-arith-imm "add" (immediate-rep 1) acc))))
 
           (hash-set! primitives
             'dec
             (cons 1 (lambda (reg)
-                      (emit-move reg "rax")
-                      (emit-arith-imm "sub" (immediate-rep 1) "rax"))))
+                      (emit-move reg acc)
+                      (emit-arith-imm "sub" (immediate-rep 1) acc))))
 
           (hash-set! primitives
             'integer->char
@@ -246,7 +250,7 @@
                       (let ((shift (- (find-shift (hash-ref tags 'char))
                                       (find-shift (hash-ref tags 'sys-int))))
                             (tag (find-tag (hash-ref tags 'char))))
-                      (emit-move reg "rax")
+                      (emit-move reg acc)
                       (emit "salq $~d, %rax" shift)
                       (emit "orq $~d, %rax" tag)))))
 
@@ -255,62 +259,44 @@
             (cons 1 (lambda (reg)
                       (let ((shift (- (find-shift (hash-ref tags 'char))
                                      (find-shift (hash-ref tags 'sys-int)))))
-                        (emit "movq %~a, %rax" reg)
+                        (emit-move reg acc)
                         (emit "shrq $~d, %rax" shift)))))
 
           (hash-set! primitives
             'not
             (cons 1 (lambda (reg)
-                      (let ((shift-amt (find-shift (hash-ref tags 'sys-int))))
-                        (emit-move reg "rax")
-                        (emit "shrq $~d, %rax" shift-amt)
-                        (emit "notq %rax")
-                        (emit "shlq $~d, %rax" shift-amt)))))
+                      (emit-move reg acc)
+                      (emit-freed 'sys-int acc)
+                      (emit "notq %rax")
+                      (emit-tagged 'sys-int acc))))
 
           (hash-set! primitives
             'null?
             (cons 1 (lambda (reg)
-                      (let ((null-mask (find-mask (hash-ref tags 'null-list))))
-                        (emit "testq $~d, %~a" null-mask reg)
-                        (emit-predicate-result 'equal)))))
+                      (emit-type-predicate 'null-list reg))))
 
           (hash-set! primitives
             'zero?
             (cons 1 (lambda (reg)
-                        (emit "movq $0, %rax")
-                        (emit "cmpq $0, %~a" reg)
-                        (emit-predicate-result 'equal))))
+                        (emit-move-imm 0 acc)
+                        (emit-comparison-predicate acc reg 'equal))))
 
           (hash-set! primitives
             'integer?
             (cons 1 (lambda (reg)
-                      (emit-move reg acc)
-                      (emit-freed 'sys-int acc)
-                      (emit "cmpq %~a, %rax" reg)
-                      (emit-predicate-result 'equal))))
+                      (emit-type-predicate 'sys-int reg))))
 
 
           (hash-set! primitives
             'char?
             (cons 1 (lambda (reg)
-                      (let ((char-mask (find-mask (hash-ref tags 'char)))
-                            (char-tag (find-tag (hash-ref tags 'char)))
-                            (bool-tag (find-tag (hash-ref tags 'bool))))
-                        (emit "movq $0, %rax")
-                        (emit "andq $~d, %~a" char-mask reg)
-                        (emit "cmpq $~d, %~a" char-tag reg)
-                        (emit-predicate-result 'equal)))))
+                      (emit-type-predicate 'char reg))))
 
 
           (hash-set! primitives
             'boolean?
             (cons 1 (lambda (reg)
-                      (let ((bool-mask (find-mask (hash-ref tags 'bool)))
-                            (bool-tag (find-tag (hash-ref tags 'bool))))
-                        (emit "movq $0, %rax")
-                        (emit "andq $~d, %~a" bool-mask reg)
-                        (emit "cmpq $~d, %~a" bool-tag reg)
-                        (emit-predicate-result 'equal)))))
+                      (emit-type-predicate 'bool reg))))
 
           (hash-set! primitives
             '+
