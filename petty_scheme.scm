@@ -3,10 +3,45 @@
              (srfi srfi-13)
              (srfi srfi-60))
 
+(define word-size 8)
 
-(define global-env '())
+;; an environment consists of a hash table containing
+;; symbols and stack offsets for the variables the symbols
+;; reference. Each environment save the global one
+;; also has a special symbol, env-parent-marker, which
+;; holds a pointer to its parent environment.
+(define global-env (make-hash-table))
+
+(define env-parent-marker '_%%$_PARENT)
+
+
+(define (get-env-size env)
+  (hash-count (lambda (entry value) (not (hash-table? value))) env))
+
+
+(define (bind sym env)
+  (hash-set! env sym (* word-size (+ 1 (get-env-size env))))
+  (hash-ref env sym))   ; return the assigned offset
+
+
+(define (new-env parent)
+  (let ((child ((make-hash-table))))
+    (hash-set! child env-parent-marker parent)
+    child))
+
+
+(define (lookup sym env)
+  (let ((offset (hash-ref env sym)))
+    (if offset
+        offset
+        (let ((parent (hash-ref env env-parent-marker)))
+          (if parent
+              (+ (lookup sym parent) (get-env-size parent))
+              #f)))))
 
 (define acc "rax")
+(define stack-pointer "rsp")
+(define frame-pointer "rbp")
 
 (define (gen-label label-base)
   (gensym label-base))
@@ -136,7 +171,8 @@
             (format out ".globl scheme_entry~%")
             (format out ".type scheme_entry, @function~%~%")
             (emit-primitive-procedures)
-            (format out "~%scheme_entry:~%"))
+            (format out "~%scheme_entry:~%")
+            (emit-lambda-preamble global-env))
 
           (define (emit-epilogue)
             (format out "~%~%.data~%"))
@@ -160,7 +196,7 @@
 
           (define (emit-freed type reg)
             (let ((shift (find-shift (hash-ref tags type))))
-              (emit "sarq $~d, %~a" shift reg)))
+              (emit "shrq $~d, %~a" shift reg)))
 
           (define (emit-tagged type reg)
               (let ((shift (find-shift (hash-ref tags type)))
@@ -194,27 +230,113 @@
                           (emit-move acc current-reg))
                       (iter (+ 1 current-param)))))))
 
+
+          (define (emit-jump label)
+            (emit "jmp ~a" label))
+
+          (define (emit-push reg)
+            (emit "pushq %~a" reg))
+
+          (define (emit-push-mem address)
+            (emit "pushq $~d" address))
+
+          (define (emit-pop reg)
+            (emit "popq %~a" reg))
+
+          (define (emit-pop-mem address)
+            (emit "popq $~d" address))
+
+          (define (emit-load-local offset dest)
+            (if offset
+                (emit "movq -~a(%rbp), %~a" offset dest)
+                (emit-error "emit-load-local: Symbol lookup failed")))
+
+          (define (emit-store-local src offset)
+            (if offset
+                (emit "movq %~a, -~a(%rbp)" src offset)
+                (emit-error "emit-store-local: Symbol lookup failed")))
+
+          (define (emit-load-arg offset dest)
+            (if offset
+                (emit "movq ~a(%rbp), %~a" offset dest)
+                (emit-error "emit-load-arg: Symbol lookup failed")))
+
+          (define (emit-store-arg src offset)
+            (if offset
+                (emit "movq %~a, ~a(%rbp)" src offset)
+                (emit-error "emit-store-arg: Symbol lookup failed")))
+
+          (define (emit-lambda-preamble env)
+            (emit-push frame-pointer)
+            (emit-move stack-pointer frame-pointer))
+
+          (define (emit-lambda-epilogue env)
+            (emit-move frame-pointer stack-pointer)
+            (emit-pop frame-pointer))
+
+          (define (emit-lambda params body env)
+            (let ((lambda-start (gen-label "lambda"))
+                  (lambda-end (gen-label "lambda_bypass")))
+             (emit-jump lambda-end)
+             (emit-label lambda-start)
+             (emit-lambda-preamble env)
+             ;(emit-error "lambda expressions not supported yet")
+             (emit-lambda-epilogue env)
+             (emit-label lambda-end)
+             lambda-start))
+
+
+          (define (emit-load-address label reg)
+            (emit "lea ~a, %~a" label reg))
+
+
+          (define (emit-bind-local expr env)
+            (let ((name (car expr))
+                  (value (cadr expr)))
+              (cond
+                ((list? name)
+                 (let ((offset (bind (car name) env))
+                       (label (emit-lambda (cdr name) value env)))
+                  (emit-load-address label acc)
+                  (emit-store-local acc offset)))
+                ((symbol? name)
+                 (let ((offset (bind name env)))
+                   (if offset
+                       (begin
+                         (emit-eval value env)
+                         (emit-store-local acc offset))
+                       (emit-error "symbol not found"))))
+                (else (emit-error "Dynamic symbols not supported")))))
+
+
           (define (emit-eval expr env)
             (cond ((immediate? expr)
                    (emit-move-imm (immediate-rep expr) acc))
-                  ((symbol? expr)
-                   (emit-error "symbols not supported yet"))
                   ((list? expr)
                    (let ((arity (- (length expr) 1))
                          (fn (car expr)))
-                     (cond ((equal? 'quote fn)
-                            (emit "nop"))
-                           ((> 0 arity) (emit-error "arity mismatch"))
+                     (cond
+                        ((equal? 'quote fn) (emit "nop"))
+                        ((equal? 'lambda fn) (emit "nop"))
+                        ((equal? 'if fn) (emit "nop"))
+                        ((equal? 'cond fn) (emit "nop"))
+                        ((equal? 'define fn)
+                         (emit-bind-local (cdr expr) env))
+                        (else
+                          (cond
+                            ((> 0 arity) (emit-error "arity mismatch"))
                             ((zero? arity)
                              (if (primitive? fn)
                                  (apply-prim fn '() env)
                                  (emit-apply fn '() env)))
                             (else
-                              (let ((arg-list (cdr expr)))
-                                (let ((evaluated (evlist arg-list env)))
-                                  (if (primitive? fn)
-                                      (apply-prim fn evaluated env)
-                                      (emit-apply fn evaluated env))))))))
+                              (let* ((arg-list (cdr expr))
+                                     (evaluated (evlist arg-list env)))
+                                (if (primitive? fn)
+                                    (apply-prim fn evaluated env)
+                                    (emit-apply fn evaluated env)))))))))
+                  ((symbol? expr)
+                   (emit-load-local (lookup expr env) acc))
                   (else (emit-error "cannot evaluate"))))
 
           (define (apply-prim fn args env)
@@ -251,7 +373,7 @@
                                       (find-shift (hash-ref tags 'sys-int))))
                             (tag (find-tag (hash-ref tags 'char))))
                       (emit-move reg acc)
-                      (emit "salq $~d, %rax" shift)
+                      (emit "shlq $~d, %rax" shift)
                       (emit "orq $~d, %rax" tag)))))
 
           (hash-set! primitives
@@ -363,10 +485,11 @@
           (let loop ((current-clause (read in)))
             (if (not (eof-object? current-clause))
                 (begin
-                  ;(format #t "~A~%" current-clause)
-                  (emit-eval current-clause '())
+                  (emit-eval current-clause global-env)
                   (loop (read in)))
-                (emit "ret")))
+                (begin
+                  (emit-lambda-epilogue global-env)
+                  (emit "ret"))))
           (emit-epilogue))))))
 
 
