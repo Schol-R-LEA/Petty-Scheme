@@ -1,4 +1,10 @@
-(add-to-load-path "petty")
+(add-to-load-path ".")
+
+(use-modules (petty reconciliations))
+
+
+(set! isa-type (supported-isa amd64))
+(set! os-type (supported-os linux-amd64))
 
 (use-modules (ice-9 format)     ; string formatting
              (ice-9 rdelim)     ; line-oriented input
