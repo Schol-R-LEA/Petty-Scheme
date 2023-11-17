@@ -1,7 +1,7 @@
 (define-module (petty env)
-  #:export (global-env bind lookup))
+  #:export (global-env new-env bind lookup))
 
-(use-module (petty amd64))
+(use-modules (petty system))
 
 
 ;; an environment consists of a hash table containing
@@ -9,8 +9,6 @@
 ;; reference. Each environment save the global one
 ;; also has a special symbol, env-parent-marker, which
 ;; holds a pointer to its parent environment.
-
-
 
 (define global-env (make-hash-table))
 

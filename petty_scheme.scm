@@ -3,7 +3,9 @@
              (srfi srfi-13)     ; enhanced strings
              (srfi srfi-60)     ; bitwise operations on integers
              (petty compile-program)
-             (petty emit))
+             (petty emit)
+             (petty system)
+             (petty lambda))
 
 (define ipath  (list-ref (program-arguments) 1))
 (define opath  (list-ref (program-arguments) 2))
@@ -24,7 +26,7 @@
                   (loop (read in)))
                 (begin
                   (emit-lambda-epilogue global-env)
-                  (emit "ret"))))
+                  (emit-program-exit))))
           (emit-epilogue))))))
 
 (compile-source-file ipath opath source)

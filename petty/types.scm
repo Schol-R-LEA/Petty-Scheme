@@ -1,7 +1,14 @@
 (define-module (petty types)
-  #:export (tags get-shift get-mask get-tag any->integer immediate? immediate-rep))
+  #:export (tags
+            find-shift find-mask find-tag
+            get-shift get-mask get-tag
+            any->integer
+            immediate? immediate-rep
+            emit-freed emit-tagged emit-type-predicate))
 
-(use-modules (srfi srfi-60))    ; bitwise operations on integers
+(use-modules (srfi srfi-60)    ; bitwise operations on integers
+             (petty system))
+
 
 (define tags (make-hash-table))
 
@@ -59,3 +66,22 @@
 
 (define (immediate? x)
   (or (null? x) (integer? x) (char? x) (boolean? x)))
+
+
+(define (emit-freed type reg)
+  (let ((shift (find-shift (hash-ref tags type))))
+    (emit-shift-left shift reg)))
+
+(define (emit-tagged type reg)
+    (let ((shift (find-shift (hash-ref tags type)))
+          (tag (find-tag (hash-ref tags type))))
+      (emit-shift-right shift reg)
+      (emit-or-imm tag reg)))
+
+
+(define (emit-type-predicate type reg)
+  (let ((mask (find-mask (hash-ref tags type)))
+        (tag (find-tag (hash-ref tags type))))
+    (emit-load-imm tag acc)
+    (emit-and-imm mask reg)
+    (emit-comparison-predicate acc reg 'equal)))
