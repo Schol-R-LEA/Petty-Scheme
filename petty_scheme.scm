@@ -4,6 +4,7 @@
              (srfi srfi-60)     ; bitwise operations on integers
              (petty compile-program)
              (petty emit)
+             (petty env)
              (petty system)
              (petty lambda))
 
@@ -19,11 +20,11 @@
           (set! out out-file)
           ;; body of the main compilation function
           (emit-preamble)
-          (let loop ((current-clause (read in)))
+          (let loop ((current-clause (read in-file)))
             (if (not (eof-object? current-clause))
                 (begin
                   (compile-program current-clause)
-                  (loop (read in)))
+                  (loop (read in-file)))
                 (begin
                   (emit-lambda-epilogue global-env)
                   (emit-program-exit))))

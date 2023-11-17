@@ -9,7 +9,7 @@
              (petty env)
              (petty types)
              (petty system)
-             (petty primitives))
+             (petty inline-primitives))
 
 
 (define (emit-eval expr env)
@@ -44,7 +44,7 @@
 
 
 (define (apply-prim fn args env)
-(let ((op (hash-ref primitives fn)))
+(let ((op (hash-ref inline-primitives fn)))
   (if op
       (case (prim-arity op)
         ((0) ((prim-proc op)))

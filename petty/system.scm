@@ -1,6 +1,9 @@
 (define-module (petty system)
   #:export (isa-type word-size passing-seq
   acc stack-pointer frame-pointer
+  emit-preamble emit-epilogue
+  emit-program-exit
+  emit-return
   emit-move
   emit-load emit-load-imm emit-load-address
   emit-store emit-store-imm
@@ -32,9 +35,17 @@
 
 (define word-size (bind-isa-detail "word-size"))
 (define passing-seq (bind-isa-detail "passing-seq"))
+
 (define acc (bind-isa-detail "acc"))
 (define stack-pointer (bind-isa-detail "stack-pointer"))
 (define frame-pointer (bind-isa-detail "frame-pointer"))
+
+(define emit-preamble (bind-isa-detail "emit-preamble"))
+(define emit-epilogue (bind-isa-detail "emit-epilogue"))
+
+(define emit-program-exit (bind-isa-detail "emit-program-exit"))
+(define emit-return (bind-isa-detail "emit-return"))
+
 (define emit-move (bind-isa-detail "emit-move"))
 (define emit-load (bind-isa-detail "emit-load"))
 (define emit-load-imm (bind-isa-detail "emit-load-imm"))

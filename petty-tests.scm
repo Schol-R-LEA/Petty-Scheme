@@ -8,7 +8,10 @@
              (srfi srfi-60)     ; bitwise operations on integers
              (srfi srfi-64)    ; unit tests
              (petty compile-program)
-             (petty amd64))
+             (petty system)
+             (petty emit)
+             (petty env)
+             (petty eval))
 
 (test-begin "loading")
 

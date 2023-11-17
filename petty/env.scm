@@ -1,7 +1,10 @@
 (define-module (petty env)
-  #:export (global-env new-env bind lookup))
+  #:export (global-env new-env bind lookup emit-bind-local))
 
-(use-modules (petty system))
+(use-modules (petty system)
+             (petty emit)
+             (petty eval)
+             (petty lambda))
 
 
 ;; an environment consists of a hash table containing
@@ -38,3 +41,21 @@
           (if parent
               (+ (lookup sym parent) (get-env-size parent))
               #f)))))
+
+(define (emit-bind-local expr env)
+  (let ((name (car expr))
+        (value (cadr expr)))
+    (cond
+      ((list? name)
+        (let ((offset (bind (car name) env))
+              (label (emit-lambda (car name) (cdr name) value env)))
+        (emit-load-address label acc)
+        (emit-store-local acc offset)))
+      ((symbol? name)
+        (let ((offset (bind name env)))
+          (if offset
+              (begin
+                (emit-eval value env)
+                (emit-store-local acc offset))
+              (emit-error "symbol not found"))))
+      (else (emit-error "Dynamic symbols not supported")))))

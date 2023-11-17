@@ -1,6 +1,8 @@
 (define-module (petty amd64)
   #:export (amd64-word-size amd64-passing-seq
             amd64-acc amd64-stack-pointer amd64-frame-pointer
+            amd64-emit-preamble amd64-emit-epilogue amd64-emit-program-exit
+            amd64-emit-return
             amd64-emit-move
             amd64-emit-load amd64-emit-load-imm amd64-emit-load-address
             amd64-emit-store amd64-emit-store-imm
@@ -47,8 +49,16 @@
   (format out "~%scheme_entry:~%")
   (emit-lambda-preamble global-env))
 
+
+(define (amd64-emit-program-exit)
+  (emit "ret"))
+
+
 (define (amd64-emit-epilogue)
   (format out "~%~%.data~%"))
+
+(define (amd64-emit-return)
+  (emit "ret"))
 
 (define (amd64-emit-primitive-procedures)
   #f)
