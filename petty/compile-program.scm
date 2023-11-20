@@ -1,15 +1,22 @@
 (define-module (petty compile-program)
   #:export (compile-program))
 
-(use-modules (ice-9 format)     ; string formatting
-             (srfi srfi-1)      ; enhanced lists
-             (srfi srfi-13)     ; enhanced strings
-             (srfi srfi-60)     ; bitwise operations on integers
+(use-modules (petty reconciliations)
+             (petty system)
              (petty emit)
              (petty env)
              (petty eval))
 
 
-(define (compile-program expr)
-  (emit-eval expr global-env))
+(define (compile-program exprs)
+  (emit-preamble)
+  (let loop ((current-clause (car exprs))
+             (remaining-clauses (cdr exprs)))
+    (emit-eval expr global-env)
+    (if (not (null? remaining-clauses))
+        (loop (car remaining-clauses) (cdr remaining-clauses))
+        (begin
+          (emit-lambda-epilogue global-env)
+          (emit-program-exit))))
+  (emit-epilogue))
 

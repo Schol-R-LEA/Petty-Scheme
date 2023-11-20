@@ -1,3 +1,12 @@
 %%%% Starting test loading
 Group begin: loading
+Test begin:
+  source-file: "/home/schol-r-lea/Documents/Programming/Projects/Petty-Scheme/petty-tests.scm"
+  source-line: 40
+  source-form: (test-equal word-size amd64-word-size)
+Test end:
+  result-kind: pass
+  actual-value: 8
+  expected-value: 8
 Group end: loading
+# of expected passes      1

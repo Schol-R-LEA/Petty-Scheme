@@ -1,7 +1,27 @@
-(define-module (petty amd64))
-
+(define-module (petty amd64)
+  #:export
+    (amd64-word-size amd64-passing-seq
+    amd64-acc amd64-stack-pointer amd64-frame-pointer
+    amd64-emit-preamble amd64-emit-epilogue
+    amd64-emit-program-exit
+    amd64-emit-return
+    amd64-emit-move
+    amd64-emit-load amd64-emit-load-imm amd64-emit-load-address
+    amd64-emit-store
+    amd64-emit-arith amd64-emit-arith-imm amd64-emit-arith-operation
+    amd64-emit-jump amd64-emit-conditional
+    amd64-emit-push amd64-emit-push-mem amd64-emit-pop amd64-emit-pop-mem
+    amd64-emit-and amd64-emit-and-imm
+    amd64-emit-or amd64-emit-or-imm
+    amd64-emit-xor amd64-emit-xor-imm
+    amd64-emit-not
+    amd64-emit-shift-left amd64-emit-shift-right
+    amd64-emit-load-local amd64-emit-store-local
+    amd64-emit-load-arg amd64-emit-store-arg
+    amd64-emit-predicate-result amd64-emit-comparison-predicate))
 
 (use-modules (petty reconciliations)
+             (petty system)
              (ice-9 format)     ; string formatting
              (srfi srfi-1)      ; enhanced lists
              (srfi srfi-13)     ; enhanced strings
@@ -13,8 +33,6 @@
              (petty lambda)
              (petty comparisons))
 
-
-(map-specific (supported-isa amd64) isa-reconciliations)
 
 (define amd64-word-size 8)
 
@@ -154,9 +172,15 @@
     (emit "set~a %al" cmp)
     (emit-tagged 'bool amd64-acc)))
 
+
+(define (amd64-emit-comparison value-0 value-1)
+    (emit "cmpq %~a, %~a" value-0 value-1))
+
+
 (define (amd64-emit-comparison-predicate value-0 value-1 comparison)
   (amd64-emit-comparison value-0 value-1)
   (amd64-emit-predicate-result comparison))
+
 
 
 (define (amd64-emit-bind-local expr env)
@@ -166,7 +190,7 @@
       ((list? name)
        (let ((offset (bind (car name) env))
              (label (emit-lambda (car name) (cdr name) value env)))
-        (emit-load-address label amd64-acc)
+        (amd64-emit-load-address label amd64-acc)
         (amd64-emit-store-local amd64-acc offset)))
       ((symbol? name)
        (let ((offset (bind name env)))

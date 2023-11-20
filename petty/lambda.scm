@@ -12,7 +12,6 @@
              (petty system))
 
 
-
 (define (emit-lambda-preamble env)
   (emit-push frame-pointer)
   (emit-move stack-pointer frame-pointer))
